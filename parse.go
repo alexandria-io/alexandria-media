@@ -29,6 +29,8 @@ type AlexandriaMedia struct {
 		Publisher string `json:"publisher"`
 		Timestamp int64  `json:"timestamp"`
 		Runtime   int64  `json:"runtime"`
+		Size      int64  `json:"size"`
+		Extras    string `json:"extras"`
 		Type      string `json:"type"`
 	} `json:"alexandria-media"`
 	Signature string `json:"signature"`
