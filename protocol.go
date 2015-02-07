@@ -14,24 +14,24 @@ var ()
 
 const MEDIA_ROOT_KEY = "alexandria-media"
 const PUBLISHER_ROOT_KEY = "alexandria-publisher"
+const MIN_BLOCK = 980970
 
 type AlexandriaMedia struct {
 	AlexandriaMedia struct {
-		Checksum string `json:"checksum"`
-		Info     struct {
-			Description string `json:"description"`
+		Torrent   string `json:"turrent"`
+		Publisher string `json:"publisher"`
+		Timestamp int64  `json:"timestamp"`
+		Runtime   int64  `json:"runtime"`
+		Info      struct {
 			Title       string `json:"title"`
+			Description string `json:"description"`
 		} `json:"info"`
 		Payment struct {
 			Amount int64  `json:"amount"`
 			Type   string `json:"type"`
 		} `json:"payment"`
-		Publisher string `json:"publisher"`
-		Timestamp int64  `json:"timestamp"`
-		Runtime   int64  `json:"runtime"`
-		Size      int64  `json:"size"`
-		Extras    string `json:"extras"`
-		Type      string `json:"type"`
+		Extras string `json:"extras"`
+		Type   string `json:"type"`
 	} `json:"alexandria-media"`
 	Signature string `json:"signature"`
 }
@@ -125,8 +125,8 @@ func VerifyMedia(b []byte) (AlexandriaMedia, error) {
 		}
 	}
 
-	// verify checksum length
-	if len(v.AlexandriaMedia.Checksum) <= 1 {
+	// verify torrent hash length
+	if len(v.AlexandriaMedia.Torrent) <= 1 {
 		return v, errors.New("can't verify media - invalid checksum length")
 	}
 
@@ -136,8 +136,8 @@ func VerifyMedia(b []byte) (AlexandriaMedia, error) {
 	}
 
 	// verify signature was created by this address
-	// signature pre-image for media is the string concatenation of checksum+timestamp
-	if checkSignature(v.AlexandriaMedia.Publisher, signature, v.AlexandriaMedia.Checksum+strconv.FormatInt(v.AlexandriaMedia.Timestamp, 10)) == false {
+	// signature pre-image for media is the string concatenation of torrenthash+timestamp
+	if checkSignature(v.AlexandriaMedia.Publisher, signature, v.AlexandriaMedia.Torrent+strconv.FormatInt(v.AlexandriaMedia.Timestamp, 10)) == false {
 		return v, errors.New("can't verify media - message failed to pass signature verification")
 	}
 
