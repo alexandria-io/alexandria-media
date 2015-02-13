@@ -178,6 +178,32 @@ func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, bl
 
 }
 
+func StoreMedia(media AlexandriaMedia, dbtx *sql.Tx, txid string, block int) {
+	// store in database
+
+	// make sure extras is stored as an empty string if it doesn't exist
+	if len(media.AlexandriaMedia.Extras) < 1 {
+		media.AlexandriaMedia.Extras = ""
+	}
+
+	stmtstr := `insert into media (publisher, torrent, timestamp, type, runtime, title, description, payment_amount, payment_type, extras, txid, block, signature, active) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, 1)`
+
+	stmt, err := dbtx.Prepare(stmtstr)
+	if err != nil {
+		fmt.Println("exit 102")
+		log.Fatal(err)
+	}
+
+	_, stmterr := stmt.Exec(media.AlexandriaMedia.Publisher, media.AlexandriaMedia.Torrent, media.AlexandriaMedia.Timestamp, media.AlexandriaMedia.Type, media.AlexandriaMedia.Runtime, media.AlexandriaMedia.Info.Title, media.AlexandriaMedia.Info.Description, media.AlexandriaMedia.Payment.Amount, media.AlexandriaMedia.Payment.Type, media.AlexandriaMedia.Extras, media.Signature)
+	if err != nil {
+		fmt.Println("exit 103")
+		log.Fatal(stmterr)
+	}
+
+	stmt.Close()
+
+}
+
 func checkSignature(address string, signature string, message string) bool {
 	if foundation.RPCCall("verifymessage", address, signature, message) == true {
 		return true
