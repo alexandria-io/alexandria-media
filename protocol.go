@@ -8,6 +8,7 @@ import (
 	"log"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/metacoin/foundation"
 )
@@ -18,6 +19,7 @@ const MEDIA_ROOT_KEY = "alexandria-media"
 const PUBLISHER_ROOT_KEY = "alexandria-publisher"
 const MIN_BLOCK = 1002555
 
+// media structs
 type AlexandriaMedia struct {
 	AlexandriaMedia struct {
 		Torrent   string `json:"torrent"`
@@ -39,7 +41,6 @@ type AlexandriaMedia struct {
 	} `json:"alexandria-media"`
 	Signature string `json:"signature"`
 }
-
 type AlexandriaPublisher struct {
 	AlexandriaPublisher struct {
 		Name      string `json:"name"`
@@ -47,6 +48,16 @@ type AlexandriaPublisher struct {
 		Timestamp int64  `json:"timestamp"`
 	} `json:"alexandria-publisher"`
 	Signature string `json:"signature"`
+}
+
+// multipart structs
+type MediaMultipartSingle struct {
+	Part      int
+	Max       int
+	Reference string
+	Data      string
+	Txid      string
+	Block     int
 }
 
 // reference: Cory LaNou, Mar 2 '14 at 15:21, http://stackoverflow.com/a/22129435/2576956
@@ -105,6 +116,84 @@ func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
 
 	// fmt.Println(" -- VERIFIED --")
 	return v, nil
+
+}
+
+func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
+	// store in database
+	stmtstr := `insert into media_multipart (part, max, reference, data, txid, block, complete, active) values (` + strconv.Itoa(mms.Part) + `, ` + strconv.Itoa(mms.Max) + `, "` + mms.Reference + `", ?, "` + mms.Txid + `", ` + strconv.Itoa(mms.Block) + `, 0, 1)`
+
+	stmt, err := dbtx.Prepare(stmtstr)
+	if err != nil {
+		fmt.Println("exit 100")
+		log.Fatal(err)
+	}
+
+	_, stmterr := stmt.Exec(mms.Data)
+	if err != nil {
+		fmt.Println("exit 106")
+		log.Fatal(stmterr)
+	}
+
+	stmt.Close()
+
+}
+
+func VerifyMediaMultipartSingle(s string, txid string, block int) (MediaMultipartSingle, error) {
+	var ret MediaMultipartSingle
+	prefix := "alexandria-media-multipart("
+
+	// check prefix
+	checkPrefix := strings.HasPrefix(s, prefix)
+	if !checkPrefix {
+		return ret, errors.New("wrong prefix in tx-comment (does not match required prefix)")
+	}
+
+	// trim prefix off
+	s = strings.TrimPrefix(s, prefix)
+
+	// check part and max
+	part, err := strconv.Atoi(string(s[0]))
+	if err != nil {
+		fmt.Println("cannot convert part to int")
+		return ret, errors.New("cannot convert part to int")
+	}
+	max, err2 := strconv.Atoi(string(s[2]))
+	if err2 != nil {
+		fmt.Println("cannot convert max to int")
+		return ret, errors.New("cannot convert max to int")
+	}
+
+	// check reference
+	reference := "error"
+	data := ""
+	if part == 0 {
+		reference = "0"
+		ind := strings.Index(s, "):")
+		data = s[ind+2:]
+	} else {
+		// fmt.Printf("# # length check: %v # # # \n", len(s))
+		if len(s) < 71 {
+			return ret, errors.New("not enough data in mutlipart string")
+		}
+		reference = s[4:68]
+		data = s[70:]
+	}
+
+	// fmt.Printf("data: %v\n", data)
+	// fmt.Printf("=== VERIFIED ===\n")
+	// fmt.Printf("part: %v\nmax: %v\nreference: %v\n", part, max, reference)
+
+	ret = MediaMultipartSingle{
+		Part:      part,
+		Max:       max,
+		Reference: reference,
+		Data:      data,
+		Txid:      txid,
+		Block:     block,
+	}
+
+	return ret, nil
 
 }
 
