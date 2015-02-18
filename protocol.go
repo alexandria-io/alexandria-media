@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -121,7 +120,7 @@ func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
 
 func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
 	// store in database
-	stmtstr := `insert into media_multipart (part, max, reference, data, txid, block, complete, active) values (` + strconv.Itoa(mms.Part) + `, ` + strconv.Itoa(mms.Max) + `, "` + mms.Reference + `", ?, "` + mms.Txid + `", ` + strconv.Itoa(mms.Block) + `, 0, 1)`
+	stmtstr := `insert into media_multipart (part, max, reference, data, txid, block, complete, success, active) values (` + strconv.Itoa(mms.Part) + `, ` + strconv.Itoa(mms.Max) + `, "` + mms.Reference + `", ?, "` + mms.Txid + `", ` + strconv.Itoa(mms.Block) + `, 0, 0, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
@@ -130,12 +129,94 @@ func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
 	}
 
 	_, stmterr := stmt.Exec(mms.Data)
-	if err != nil {
+	if stmterr != nil {
 		fmt.Println("exit 106")
 		log.Fatal(stmterr)
 	}
 
 	stmt.Close()
+
+}
+
+func CheckMediaMultipartComplete(reference string, dbtx *sql.Tx) ([]byte, error) {
+	// using the reference tx, check how many different txs we have and determine if we have all transactions
+	// if we have a valid media-multipart complete instance, let's return the byte array it consists of
+	var ret []byte
+
+	stmtstr := `select part, max, data from media_multipart where active = 1 and complete = 0 and reference = "` + reference + `" order by part asc`
+
+	stmt, err := dbtx.Prepare(stmtstr)
+	if err != nil {
+		fmt.Println("exit 120")
+		log.Fatal(err)
+	}
+
+	rows, stmterr := stmt.Query()
+	if err != nil {
+		fmt.Println("exit 121")
+		log.Fatal(stmterr)
+	}
+
+	var rowsCount int = 0
+	var pmax int
+	var fullData string
+
+	for rows.Next() {
+		var part int
+		var max int
+		var data string
+		rows.Scan(&part, &max, &data)
+
+		// TODO: require signature verification for multipart messages
+		if rowsCount > max {
+			return ret, errors.New("too many rows in multipart message - check for reorg/bogus multipart data")
+		}
+		rowsCount++
+
+		pmax = max
+		fullData += data
+	}
+
+	if rowsCount != pmax+1 {
+		return ret, errors.New("only found " + strconv.Itoa(rowsCount) + "/" + strconv.Itoa(pmax+1) + " multipart messages")
+	}
+
+	stmt.Close()
+	rows.Close()
+
+	// set complete to 1
+	updatestr := `update media_multipart set complete = 1 where reference = "` + reference + `"`
+	updatestmt, updateerr := dbtx.Prepare(updatestr)
+	if updateerr != nil {
+		fmt.Println("exit 122")
+		log.Fatal(updateerr)
+	}
+
+	_, updatestmterr := updatestmt.Exec()
+	if updatestmterr != nil {
+		fmt.Println("exit 123")
+		log.Fatal(updatestmterr)
+	}
+	updatestmt.Close()
+
+	return []byte(fullData), nil
+}
+
+func UpdateMediaMultipartSuccess(reference string, dbtx *sql.Tx) {
+
+	stmtstr := `update media_multipart set success = 1 where reference = "` + reference + `"`
+
+	stmt, err := dbtx.Prepare(stmtstr)
+	if err != nil {
+		fmt.Println("exit 140")
+		log.Fatal(err)
+	}
+
+	_, stmterr := stmt.Exec()
+	if err != nil {
+		fmt.Println("exit 141")
+		log.Fatal(stmterr)
+	}
 
 }
 
@@ -168,7 +249,7 @@ func VerifyMediaMultipartSingle(s string, txid string, block int) (MediaMultipar
 	reference := "error"
 	data := ""
 	if part == 0 {
-		reference = "0"
+		reference = txid
 		ind := strings.Index(s, "):")
 		data = s[ind+2:]
 	} else {
@@ -271,7 +352,7 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 	if len(v.AlexandriaMedia.Payment.Type) < 1 {
 		return v, m, errors.New("can't verify media - invalid payment type length")
 	}
-	if v.AlexandriaMedia.Payment.Amount <= 0 {
+	if v.AlexandriaMedia.Payment.Amount < 0 {
 		return v, m, errors.New("can't verify media - invalid payment amount")
 	}
 
@@ -306,7 +387,7 @@ func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, bl
 
 }
 
-func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx, txid string, block int) {
+func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx, txid string, block int, multipart int) {
 	// check for media info extras
 	extraInfo, ei_err := extractMediaExtraInfo(jmap)
 	extraInfoString := ""
@@ -321,7 +402,7 @@ func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx
 		media.AlexandriaMedia.Extras = ""
 	}
 
-	stmtstr := `insert into media (publisher, torrent, timestamp, type, info_title, info_description, info_year, info_size, info_extra, payment_currency, payment_type, payment_amount, extras, txid, block, signature, multipart, active) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, 0, 1)`
+	stmtstr := `insert into media (publisher, torrent, timestamp, type, info_title, info_description, info_year, info_size, info_extra, payment_currency, payment_type, payment_amount, extras, txid, block, signature, multipart, active) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, ` + strconv.Itoa(multipart) + `, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
@@ -329,15 +410,13 @@ func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx
 		log.Fatal(err)
 	}
 
-	fmt.Printf("stmt: %v\n", stmt)
+	// fmt.Printf("stmt: %v\n", stmt)
 
-	res, stmterr := stmt.Exec(media.AlexandriaMedia.Publisher, media.AlexandriaMedia.Torrent, media.AlexandriaMedia.Timestamp, media.AlexandriaMedia.Type, media.AlexandriaMedia.Info.Title, media.AlexandriaMedia.Info.Description, media.AlexandriaMedia.Info.Year, media.AlexandriaMedia.Info.Size, extraInfoString, media.AlexandriaMedia.Payment.Currency, media.AlexandriaMedia.Payment.Type, media.AlexandriaMedia.Payment.Amount, media.AlexandriaMedia.Extras, media.Signature)
+	_, stmterr := stmt.Exec(media.AlexandriaMedia.Publisher, media.AlexandriaMedia.Torrent, media.AlexandriaMedia.Timestamp, media.AlexandriaMedia.Type, media.AlexandriaMedia.Info.Title, media.AlexandriaMedia.Info.Description, media.AlexandriaMedia.Info.Year, media.AlexandriaMedia.Info.Size, extraInfoString, media.AlexandriaMedia.Payment.Currency, media.AlexandriaMedia.Payment.Type, media.AlexandriaMedia.Payment.Amount, media.AlexandriaMedia.Extras, media.Signature)
 	if stmterr != nil {
 		fmt.Println("exit 103")
 		log.Fatal(stmterr)
 	}
-
-	fmt.Printf("result: %v\n", res)
 
 	stmt.Close()
 
@@ -361,7 +440,7 @@ func extractMediaExtraInfo(jmap map[string]interface{}) ([]byte, error) {
 					v2m := v2.(map[string]interface{})
 					for k3, v3 := range v2m {
 						if k3 == "extra-info" {
-							fmt.Printf("v3(%v): %v\n\n", reflect.TypeOf(v3), v3)
+							// fmt.Printf("v3(%v): %v\n\n", reflect.TypeOf(v3), v3)
 							v3json, err := json.Marshal(v3)
 							if err != nil {
 								return ret, err
