@@ -43,10 +43,11 @@ type AlexandriaMedia struct {
 }
 type AlexandriaPublisher struct {
 	AlexandriaPublisher struct {
-		Name      string `json:"name"`
-		Address   string `json:"address"`
-		Timestamp int64  `json:"timestamp"`
-		Emailmd5  string `json:"emailmd5"`
+		Name       string `json:"name"`
+		Address    string `json:"address"`
+		Timestamp  int64  `json:"timestamp"`
+		Emailmd5   string `json:"emailmd5"`
+		Bitmessage string `json:"bitmessage"`
 	} `json:"alexandria-publisher"`
 	Signature string `json:"signature"`
 }
@@ -429,7 +430,7 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 
 func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, block int, hash string) {
 	// store in database
-	stmtstr := `insert into publisher (name, address, timestamp, txid, block, emailmd5, hash, signature, active) values (?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, "` + hash + `", ?, 1)`
+	stmtstr := `insert into publisher (name, address, timestamp, txid, block, emailmd5, bitmessage, hash, signature, active) values (?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, ?, "` + hash + `", ?, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
@@ -437,7 +438,7 @@ func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, bl
 		log.Fatal(err)
 	}
 
-	_, stmterr := stmt.Exec(publisher.AlexandriaPublisher.Name, publisher.AlexandriaPublisher.Address, publisher.AlexandriaPublisher.Timestamp, publisher.AlexandriaPublisher.Emailmd5, publisher.Signature)
+	_, stmterr := stmt.Exec(publisher.AlexandriaPublisher.Name, publisher.AlexandriaPublisher.Address, publisher.AlexandriaPublisher.Timestamp, publisher.AlexandriaPublisher.Emailmd5, publisher.AlexandriaPublisher.Bitmessage, publisher.Signature)
 	if err != nil {
 		fmt.Println("exit 101")
 		log.Fatal(stmterr)
