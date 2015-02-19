@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/metacoin/flojson"
 	"github.com/metacoin/foundation"
 )
 
@@ -45,6 +46,7 @@ type AlexandriaPublisher struct {
 		Name      string `json:"name"`
 		Address   string `json:"address"`
 		Timestamp int64  `json:"timestamp"`
+		Emailmd5  string `json:"emailmd5"`
 	} `json:"alexandria-publisher"`
 	Signature string `json:"signature"`
 }
@@ -54,6 +56,8 @@ type MediaMultipartSingle struct {
 	Part      int
 	Max       int
 	Reference string
+	Address   string
+	Signature string
 	Data      string
 	Txid      string
 	Block     int
@@ -120,21 +124,41 @@ func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
 
 func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
 	// store in database
-	stmtstr := `insert into media_multipart (part, max, reference, data, txid, block, complete, success, active) values (` + strconv.Itoa(mms.Part) + `, ` + strconv.Itoa(mms.Max) + `, "` + mms.Reference + `", ?, "` + mms.Txid + `", ` + strconv.Itoa(mms.Block) + `, 0, 0, 1)`
+	stmtstr := `insert into media_multipart (part, max, address, reference, signature, data, txid, block, complete, success, active) values (` + strconv.Itoa(mms.Part) + `, ` + strconv.Itoa(mms.Max) + `, ?, ?, ?, ?, "` + mms.Txid + `", ` + strconv.Itoa(mms.Block) + `, 0, 0, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
-		fmt.Println("exit 100")
+		fmt.Println("exit 160")
 		log.Fatal(err)
 	}
 
-	_, stmterr := stmt.Exec(mms.Data)
+	_, stmterr := stmt.Exec(mms.Address, mms.Reference, mms.Signature, mms.Data)
 	if stmterr != nil {
-		fmt.Println("exit 106")
+		fmt.Println("exit 161")
 		log.Fatal(stmterr)
 	}
 
 	stmt.Close()
+
+}
+
+func CheckPublisherAddressExists(address string, dbtx *sql.Tx) bool {
+	// check if this publisher address is already in-use
+	stmtstr := `select name from publisher where address = ?`
+
+	rows, stmterr := dbtx.Query(stmtstr, address)
+	if stmterr != nil {
+		fmt.Println("exit 91248")
+		log.Fatal(stmterr)
+	}
+
+	var rowsCount int = 0
+	for rows.Next() {
+		rowsCount++
+	}
+
+	rows.Close()
+	return rowsCount > 0
 
 }
 
@@ -233,6 +257,11 @@ func VerifyMediaMultipartSingle(s string, txid string, block int) (MediaMultipar
 	// trim prefix off
 	s = strings.TrimPrefix(s, prefix)
 
+	// check length
+	if len(s) < 108 {
+		return ret, errors.New("not enough data in mutlipart string")
+	}
+
 	// check part and max
 	part, err := strconv.Atoi(string(s[0]))
 	if err != nil {
@@ -245,30 +274,61 @@ func VerifyMediaMultipartSingle(s string, txid string, block int) (MediaMultipar
 		return ret, errors.New("cannot convert max to int")
 	}
 
-	// check reference
-	reference := "error"
-	data := ""
-	if part == 0 {
-		reference = txid
-		ind := strings.Index(s, "):")
-		data = s[ind+2:]
-	} else {
-		// fmt.Printf("# # length check: %v # # # \n", len(s))
-		if len(s) < 71 {
-			return ret, errors.New("not enough data in mutlipart string")
-		}
-		reference = s[4:68]
-		data = s[70:]
+	// get and check address
+	address := s[4:38]
+	if !checkAddress(address) {
+		// fmt.Println("address doesn't check out: \"" + address + "\"")
+		return ret, errors.New("address doesn't validate using validateaddress")
 	}
 
-	// fmt.Printf("data: %v\n", data)
+	// get reference txid
+	reference := s[39:103]
+
+	// get and check signature
+	sigEndIndex := strings.Index(s, "):")
+
+	if sigEndIndex == -1 {
+		fmt.Println("no end of signature found, malformed tx-comment")
+		return ret, errors.New("no end of signature found, malformed tx-comment")
+	}
+
+	signature := s[104:sigEndIndex]
+	data := s[sigEndIndex+2:]
+	// fmt.Println("data: \"" + data + "\"")
+
+	// signature pre-image is <part>-<max>-<address>-<txid>-<data>
+	// in the case of multipart[0], txid is 64 zeros
+	// in the case of multipart[n], where n != 0, txid is the reference txid (from multipart[0])
+	preimage := string(s[0]) + "-" + string(s[2]) + "-" + address + "-" + reference + "-" + data
+	// fmt.Printf("preimage: %v\n", preimage)
+
+	if !checkSignature(address, signature, preimage) {
+		// fmt.Println("signature didn't pass checksignature test")
+		return ret, errors.New("signature didn't pass checksignature test")
+	}
+
+	// if part == 0, reference should be submitted in the tx-comment as a string of 64 zeros
+	// the local DB will store reference = txid for this transaction after it's submitted
+	// in case of a reorg, the publisher must re-publish this multipart message (sorry)
+	if part == 0 {
+		if reference != "0000000000000000000000000000000000000000000000000000000000000000" {
+			// fmt.Println("reference txid should be 64 zeros for part 0 of a multipart message")
+			return ret, errors.New("reference txid should be 64 zeros for part 0")
+		}
+		reference = txid
+	}
+	// all checks passed, verified!
+
+	//fmt.Printf("data: %v\n", data)
 	// fmt.Printf("=== VERIFIED ===\n")
-	// fmt.Printf("part: %v\nmax: %v\nreference: %v\n", part, max, reference)
+	//fmt.Printf("part: %v\nmax: %v\nreference: %v\naddress: %v\nsignature: %v\ntxid: %v\nblock: %v\n", part, max, reference, address, signature, txid, block)
 
 	ret = MediaMultipartSingle{
 		Part:      part,
 		Max:       max,
 		Reference: reference,
+		Address:   address,
+		Signature: signature,
 		Data:      data,
 		Txid:      txid,
 		Block:     block,
@@ -310,7 +370,7 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 		}
 	}
 
-	fmt.Printf("*** debug: JSON object root matches, printing v:\n%v\n*** /debug ***\n", v)
+	// fmt.Printf("*** debug: JSON object root matches, printing v:\n%v\n*** /debug ***\n", v)
 	// verify torrent hash length
 	if len(v.AlexandriaMedia.Torrent) <= 1 {
 		return v, m, errors.New("can't verify media - invalid torrent hash length")
@@ -369,7 +429,7 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 
 func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, block int, hash string) {
 	// store in database
-	stmtstr := `insert into publisher (name, address, timestamp, txid, block, hash, signature, active) values (?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, "` + hash + `", ?, 1)`
+	stmtstr := `insert into publisher (name, address, timestamp, txid, block, emailmd5, hash, signature, active) values (?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, "` + hash + `", ?, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
@@ -377,7 +437,7 @@ func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, bl
 		log.Fatal(err)
 	}
 
-	_, stmterr := stmt.Exec(publisher.AlexandriaPublisher.Name, publisher.AlexandriaPublisher.Address, publisher.AlexandriaPublisher.Timestamp, publisher.Signature)
+	_, stmterr := stmt.Exec(publisher.AlexandriaPublisher.Name, publisher.AlexandriaPublisher.Address, publisher.AlexandriaPublisher.Timestamp, publisher.AlexandriaPublisher.Emailmd5, publisher.Signature)
 	if err != nil {
 		fmt.Println("exit 101")
 		log.Fatal(stmterr)
@@ -422,8 +482,25 @@ func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx
 
 }
 
+func CreateNewPublisherTxComment(b []byte) {
+	// given some JSON, post it to the blockchain using either a tx-comment or multipart tx-comment
+
+}
+
+// some helper functions here
 func checkSignature(address string, signature string, message string) bool {
 	if foundation.RPCCall("verifymessage", address, signature, message) == true {
+		return true
+	}
+	return false
+}
+
+func checkAddress(address string) bool {
+	result, ok := foundation.RPCCall("validateaddress", address).(*flojson.ValidateAddressResult)
+	if !ok {
+		return false
+	}
+	if result.IsValid == true {
 		return true
 	}
 	return false
