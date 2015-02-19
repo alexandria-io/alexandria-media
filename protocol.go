@@ -113,7 +113,7 @@ func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
 	}
 
 	// verify signature was created by this address
-	// signature pre-image for publisher is the string concatenation of name+address+timestamp
+	// signature pre-image for publisher is <name>-<address>-<timestamp>
 	if checkSignature(v.AlexandriaPublisher.Address, signature, v.AlexandriaPublisher.Name+"-"+v.AlexandriaPublisher.Address+"-"+strconv.FormatInt(v.AlexandriaPublisher.Timestamp, 10)) == false {
 		return v, errors.New("can't verify publisher - message failed to pass signature verification")
 	}
@@ -418,7 +418,7 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 	}
 
 	// verify signature was created by this address
-	// signature pre-image for media is the string concatenation of torrenthash+timestamp
+	// signature pre-image for media is <torrenthash>-<publisher>-<timestamp>
 	if checkSignature(v.AlexandriaMedia.Publisher, signature, v.AlexandriaMedia.Torrent+"-"+v.AlexandriaMedia.Publisher+"-"+strconv.FormatInt(v.AlexandriaMedia.Timestamp, 10)) == false {
 		return v, m, errors.New("can't verify media - message failed to pass signature verification")
 	}
@@ -490,14 +490,24 @@ func CreateNewPublisherTxComment(b []byte) {
 
 // some helper functions here
 func checkSignature(address string, signature string, message string) bool {
-	if foundation.RPCCall("verifymessage", address, signature, message) == true {
+	reply, err := foundation.RPCCall("verifymessage", address, signature, message)
+	if err != nil {
+		fmt.Println("foundation error: " + err.Error())
+		return false
+	}
+	if reply == true {
 		return true
 	}
 	return false
 }
 
 func checkAddress(address string) bool {
-	result, ok := foundation.RPCCall("validateaddress", address).(*flojson.ValidateAddressResult)
+	reply, err := foundation.RPCCall("validateaddress", address)
+	if err != nil {
+		fmt.Println("foundation error: " + err.Error())
+		return false
+	}
+	result, ok := reply.(*flojson.ValidateAddressResult)
 	if !ok {
 		return false
 	}
