@@ -277,7 +277,7 @@ func VerifyMediaMultipartSingle(s string, txid string, block int) (MediaMultipar
 
 	// get and check address
 	address := s[4:38]
-	if !checkAddress(address) {
+	if !CheckAddress(address) {
 		// fmt.Println("address doesn't check out: \"" + address + "\"")
 		return ret, errors.New("address doesn't validate using validateaddress")
 	}
@@ -501,7 +501,7 @@ func checkSignature(address string, signature string, message string) bool {
 	return false
 }
 
-func checkAddress(address string) bool {
+func CheckAddress(address string) bool {
 	reply, err := foundation.RPCCall("validateaddress", address)
 	if err != nil {
 		fmt.Println("foundation error: " + err.Error())
