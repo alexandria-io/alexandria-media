@@ -22,37 +22,44 @@ const MIN_BLOCK = 1002555
 // media structs
 type AlexandriaMedia struct {
 	AlexandriaMedia struct {
+		// required media metadata
 		Torrent   string `json:"torrent"`
 		Publisher string `json:"publisher"`
 		Timestamp int64  `json:"timestamp"`
-		Info      struct {
+		Type      string `json:"type"`
+
+		Info struct {
+			// required file information
 			Title       string `json:"title"`
 			Description string `json:"description"`
 			Year        int    `json:"year"`
-			Size        int64  `json:"size"`
+
+			// optional extra-info field
+			ExtraInfo interface{} `json:"extra-info"`
 		} `json:"info"`
-		Payment struct {
-			Currency string `json:"currency"`
-			Type     string `json:"type"`
-			Amount   int64  `json:"amount"`
-		} `json:"payment"`
-		Extras string `json:"extras"`
-		Type   string `json:"type"`
+
+		// optional fields
+		Payment interface{} `json:"payment"`
+		Extras  string      `json:"extras"`
 	} `json:"alexandria-media"`
 	Signature string `json:"signature"`
 }
+
 type AlexandriaPublisher struct {
 	AlexandriaPublisher struct {
-		Name       string `json:"name"`
-		Address    string `json:"address"`
-		Timestamp  int64  `json:"timestamp"`
+		// required publisher metadata
+		Name      string `json:"name"`
+		Address   string `json:"address"`
+		Timestamp int64  `json:"timestamp"`
+
+		// optional fields
 		Emailmd5   string `json:"emailmd5"`
 		Bitmessage string `json:"bitmessage"`
 	} `json:"alexandria-publisher"`
 	Signature string `json:"signature"`
 }
 
-// multipart structs
+// multipart struct
 type MediaMultipartSingle struct {
 	Part      int
 	Max       int
@@ -402,20 +409,6 @@ func VerifyMedia(b []byte) (AlexandriaMedia, map[string]interface{}, error) {
 	if v.AlexandriaMedia.Info.Year <= 0 {
 		return v, m, errors.New("can't verify media - invalid info year")
 	}
-	if v.AlexandriaMedia.Info.Size <= 0 {
-		return v, m, errors.New("can't verify media - invalid info size")
-	}
-
-	// verify payment info
-	if len(v.AlexandriaMedia.Payment.Currency) < 1 {
-		return v, m, errors.New("can't verify media - invalid payment currency length")
-	}
-	if len(v.AlexandriaMedia.Payment.Type) < 1 {
-		return v, m, errors.New("can't verify media - invalid payment type length")
-	}
-	if v.AlexandriaMedia.Payment.Amount < 0 {
-		return v, m, errors.New("can't verify media - invalid payment amount")
-	}
 
 	// verify signature was created by this address
 	// signature pre-image for media is <torrenthash>-<publisher>-<timestamp>
@@ -449,6 +442,15 @@ func StorePublisher(publisher AlexandriaPublisher, dbtx *sql.Tx, txid string, bl
 }
 
 func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx, txid string, block int, multipart int) {
+	// check for media payment data
+	payment, payment_err := extractMediaPayment(jmap)
+	paymentString := ""
+	if payment_err != nil {
+		fmt.Printf("payment data not found/failed - error returned: %v\n", payment_err)
+	} else {
+		paymentString = string(payment)
+	}
+
 	// check for media info extras
 	extraInfo, ei_err := extractMediaExtraInfo(jmap)
 	extraInfoString := ""
@@ -463,7 +465,7 @@ func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx
 		media.AlexandriaMedia.Extras = ""
 	}
 
-	stmtstr := `insert into media (publisher, torrent, timestamp, type, info_title, info_description, info_year, info_size, info_extra, payment_currency, payment_type, payment_amount, extras, txid, block, signature, multipart, active) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, ` + strconv.Itoa(multipart) + `, 1)`
+	stmtstr := `insert into media (publisher, torrent, timestamp, type, info_title, info_description, info_year, info_extra, payment, extras, txid, block, signature, multipart, active) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "` + txid + `", ` + strconv.Itoa(block) + `, ?, ` + strconv.Itoa(multipart) + `, 1)`
 
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
@@ -473,7 +475,7 @@ func StoreMedia(media AlexandriaMedia, jmap map[string]interface{}, dbtx *sql.Tx
 
 	// fmt.Printf("stmt: %v\n", stmt)
 
-	_, stmterr := stmt.Exec(media.AlexandriaMedia.Publisher, media.AlexandriaMedia.Torrent, media.AlexandriaMedia.Timestamp, media.AlexandriaMedia.Type, media.AlexandriaMedia.Info.Title, media.AlexandriaMedia.Info.Description, media.AlexandriaMedia.Info.Year, media.AlexandriaMedia.Info.Size, extraInfoString, media.AlexandriaMedia.Payment.Currency, media.AlexandriaMedia.Payment.Type, media.AlexandriaMedia.Payment.Amount, media.AlexandriaMedia.Extras, media.Signature)
+	_, stmterr := stmt.Exec(media.AlexandriaMedia.Publisher, media.AlexandriaMedia.Torrent, media.AlexandriaMedia.Timestamp, media.AlexandriaMedia.Type, media.AlexandriaMedia.Info.Title, media.AlexandriaMedia.Info.Description, media.AlexandriaMedia.Info.Year, extraInfoString, paymentString, media.AlexandriaMedia.Extras, media.Signature)
 	if stmterr != nil {
 		fmt.Println("exit 103")
 		log.Fatal(stmterr)
@@ -517,6 +519,27 @@ func CheckAddress(address string) bool {
 	return false
 }
 
+func extractMediaPayment(jmap map[string]interface{}) ([]byte, error) {
+	// find the "payment" json object
+	var ret []byte
+	for k, v := range jmap {
+		if k == "alexandria-media" {
+			vm := v.(map[string]interface{})
+			for k2, v2 := range vm {
+				if k2 == "payment" {
+					// fmt.Printf("v3(%v): %v\n\n", reflect.TypeOf(v3), v3)
+					v2json, err := json.Marshal(v2)
+					if err != nil {
+						return ret, err
+					}
+					return v2json, nil
+
+				}
+			}
+		}
+	}
+	return ret, errors.New("no payment extra info found")
+}
 func extractMediaExtraInfo(jmap map[string]interface{}) ([]byte, error) {
 	// find the "extra info" json object
 	var ret []byte
