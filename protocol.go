@@ -72,7 +72,7 @@ type MediaMultipartSingle struct {
 }
 
 // reference: Cory LaNou, Mar 2 '14 at 15:21, http://stackoverflow.com/a/22129435/2576956
-func isJSON(s string) bool {
+func IsJSON(s string) bool {
 	var js map[string]interface{}
 	return json.Unmarshal([]byte(s), &js) == nil
 }
@@ -85,7 +85,7 @@ func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
 
 	// fmt.Printf("Attempting to verify alexandria-publisher JSON...")
 
-	if !isJSON(string(b)) {
+	if !IsJSON(string(b)) {
 		return v, errors.New("this string isn't even JSON!")
 	}
 
