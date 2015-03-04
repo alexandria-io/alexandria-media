@@ -224,7 +224,6 @@ func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
 
 func DeactivateMedia(deactiv AlexandriaDeactivation, dbtx *sql.Tx) error {
 	stmtstr := `update media set invalidated = 1 where publisher = "` + deactiv.AlexandriaDeactivation.Address + `" and txid = "` + deactiv.AlexandriaDeactivation.Txid + `"`
-	fmt.Printf(" ~ ~ ~ ~ %v\n", stmtstr)
 	stmt, err := dbtx.Prepare(stmtstr)
 	if err != nil {
 		return err
