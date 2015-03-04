@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,7 @@ var ()
 
 const MEDIA_ROOT_KEY = "alexandria-media"
 const PUBLISHER_ROOT_KEY = "alexandria-publisher"
+const DEACTIVATION_ROOT_KEY = "alexandria-deactivation"
 const MIN_BLOCK = 1002555
 
 // media structs
@@ -59,6 +61,15 @@ type AlexandriaPublisher struct {
 	Signature string `json:"signature"`
 }
 
+type AlexandriaDeactivation struct {
+	AlexandriaDeactivation struct {
+		// required txid and address fields
+		Txid    string `json:"txid"`
+		Address string `json:"address"`
+	} `json:"alexandria-deactivation"`
+	Signature string `json:"signature"`
+}
+
 // multipart struct
 type MediaMultipartSingle struct {
 	Part      int
@@ -75,6 +86,67 @@ type MediaMultipartSingle struct {
 func IsJSON(s string) bool {
 	var js map[string]interface{}
 	return json.Unmarshal([]byte(s), &js) == nil
+}
+
+func VerifyDeactivation(b []byte) (AlexandriaDeactivation, error) {
+	var v AlexandriaDeactivation
+	var i interface{}
+	var m map[string]interface{}
+
+	if !IsJSON(string(b)) {
+		return v, errors.New("this string isn't even JSON!")
+	}
+
+	err := json.Unmarshal(b, &v)
+	if err != nil {
+		return v, err
+	}
+
+	errr := json.Unmarshal(b, &i)
+	if errr != nil {
+		return v, err
+	}
+
+	m = i.(map[string]interface{})
+	var signature string
+
+	// check the JSON object root key
+	// find the signature string
+	for key, val := range m {
+		if key == "signature" {
+			signature = val.(string)
+		} else {
+			if key != DEACTIVATION_ROOT_KEY {
+				return v, errors.New("can't verify deactivation - JSON object root key doesn't match accepted value")
+			}
+		}
+	}
+
+	// verify txid
+	rt := regexp.MustCompile("^[a-fA-F0-9]*$")
+	if !rt.MatchString(v.AlexandriaDeactivation.Txid) || len(v.AlexandriaDeactivation.Txid) != 64 {
+		return v, errors.New("can't verify deactivation - txid in incorrect format")
+	}
+
+	// verify address
+	ra := regexp.MustCompile("^[a-zA-Z0-9]*$")
+	if !ra.MatchString(v.AlexandriaDeactivation.Address) || len(v.AlexandriaDeactivation.Address) != 34 {
+		return v, errors.New("can't verify deactivation - address in incorrect format")
+	}
+
+	// verify signature
+	if v.Signature != signature {
+		return v, errors.New("can't verify deactivation - signature mismatch")
+	}
+
+	// verify signature was created by this address
+	// signature pre-image for deactivation is <address>-<txid>
+	if checkSignature(v.AlexandriaDeactivation.Address, signature, v.AlexandriaDeactivation.Address+"-"+v.AlexandriaDeactivation.Txid) == false {
+		return v, errors.New("can't verify deactivation - message failed to pass signature verification")
+	}
+
+	return v, nil
+
 }
 
 func VerifyPublisher(b []byte) (AlexandriaPublisher, error) {
@@ -148,6 +220,23 @@ func StoreMediaMultipartSingle(mms MediaMultipartSingle, dbtx *sql.Tx) {
 
 	stmt.Close()
 
+}
+
+func DeactivateMedia(deactiv AlexandriaDeactivation, dbtx *sql.Tx) error {
+	stmtstr := `update media set invalidated = 1 where publisher = "` + deactiv.AlexandriaDeactivation.Address + `" and txid = "` + deactiv.AlexandriaDeactivation.Txid + `"`
+	fmt.Printf(" ~ ~ ~ ~ %v\n", stmtstr)
+	stmt, err := dbtx.Prepare(stmtstr)
+	if err != nil {
+		return err
+	}
+
+	_, stmterr := stmt.Exec()
+	if stmterr != nil {
+		return stmterr
+	}
+
+	stmt.Close()
+	return nil
 }
 
 func CheckPublisherAddressExists(address string, dbtx *sql.Tx) bool {
