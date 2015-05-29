@@ -19,7 +19,7 @@ var ()
 const MEDIA_ROOT_KEY = "alexandria-media"
 const PUBLISHER_ROOT_KEY = "alexandria-publisher"
 const DEACTIVATION_ROOT_KEY = "alexandria-deactivation"
-const MIN_BLOCK = 1002555
+const MIN_BLOCK = 1045632
 
 // media structs
 type AlexandriaMedia struct {
